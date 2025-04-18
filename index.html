@@ -184,6 +184,41 @@
       align-items: center;
       justify-content: center;
     }
+    
+    /* Additional styles for image handling */
+    .sticky-note .content img {
+      max-width: 100%;
+      margin-top: 5px;
+      border-radius: 3px;
+    }
+    
+    .image-preview {
+      width: 100%;
+      margin: 10px 0;
+      text-align: center;
+      display: none;
+    }
+    
+    .image-preview img {
+      max-width: 100%;
+      max-height: 150px;
+      border-radius: 3px;
+    }
+    
+    .file-input-container {
+      margin-bottom: 10px;
+    }
+    
+    .remove-image-btn {
+      margin-left: 5px;
+      background-color: #f44336;
+      color: white;
+      border: none;
+      border-radius: 3px;
+      padding: 3px 6px;
+      cursor: pointer;
+      font-size: 10px;
+    }
   </style>
 </head>
 <body>
@@ -194,6 +229,17 @@
   <div class="note-modal" id="note-modal">
     <div class="note-form">
       <textarea id="note-content" placeholder="Add your comment..."></textarea>
+      
+      <div class="file-input-container">
+        <label for="note-image">Add an image or GIF:</label>
+        <input type="file" id="note-image" accept="image/*">
+      </div>
+      
+      <div class="image-preview" id="image-preview">
+        <img id="preview-img" src="" alt="Preview">
+        <button class="remove-image-btn" id="remove-image">✕</button>
+      </div>
+      
       <div class="note-form-buttons">
         <button class="cancel" id="cancel-note">Cancel</button>
         <button class="submit" id="add-note">Add Note</button>
@@ -210,6 +256,10 @@
     const newNoteBtn = document.getElementById('new-note-btn');
     const noteModal = document.getElementById('note-modal');
     const noteContent = document.getElementById('note-content');
+    const noteImage = document.getElementById('note-image');
+    const imagePreview = document.getElementById('image-preview');
+    const previewImg = document.getElementById('preview-img');
+    const removeImageBtn = document.getElementById('remove-image');
     const addNoteBtn = document.getElementById('add-note');
     const cancelNoteBtn = document.getElementById('cancel-note');
     
@@ -217,6 +267,9 @@
     let activeDrag = null;
     let offsetX = 0;
     let offsetY = 0;
+    
+    // Store current image data
+    let currentImageData = null;
     
     // Initialize the connection
     async function initialize() {
@@ -263,24 +316,45 @@
           );
           
           if (!alreadyExists) {
-            // Extract plain text from the document node content
+            // Extract content from the document node
             let content = '';
+            let imageUrl = null;
+            
             if (comment.content && comment.content.children) {
               comment.content.children.forEach(block => {
                 if (block.type === 'paragraph' && block.children) {
                   block.children.forEach(inline => {
                     if (inline.type === 'text') {
                       content += inline.text;
+                    } else if (inline.type === 'image') {
+                      // Extract image URL from the comment content
+                      imageUrl = inline.url;
+                      // Add placeholder for image in text content
+                      content += '[Image]';
+                    } else if (inline.type === 'link' && inline.children) {
+                      // Check if link contains an image
+                      inline.children.forEach(linkChild => {
+                        if (linkChild.type === 'image') {
+                          imageUrl = linkChild.url;
+                          content += '[Image]';
+                        } else if (linkChild.type === 'text') {
+                          content += linkChild.text;
+                        }
+                      });
                     }
                   });
                   content += '\n';
+                } else if (block.type === 'image') {
+                  // Handle block-level images
+                  imageUrl = block.url;
+                  content += '[Image]\n';
                 }
               });
             } else if (comment.raw_content) {
               content = comment.raw_content;
             }
             
-            if (content) {
+            if (content || imageUrl) {
               // Create a note for this comment
               await room.collection('note').create({
                 content: content,
@@ -289,7 +363,8 @@
                 x: Math.random() * (window.innerWidth - 250),
                 y: Math.random() * (window.innerHeight - 150),
                 isMetadata: true,
-                commentId: comment.id
+                commentId: comment.id,
+                imageUrl: imageUrl
               });
             }
           }
@@ -335,13 +410,17 @@
         stickyNote.style.top = `${stackTop}px`;
       }
       
-      // Build note content
+      // Build note content HTML
       let contentHtml = `
         <div class="username">
           <img class="avatar" src="https://images.websim.ai/avatar/${note.username}" alt="${note.username}">
           @${note.username}
         </div>
-        <div class="content">${note.content}</div>
+        <div class="content">
+          ${note.content.replace(/\n/g, '<br>')}
+          ${note.imageUrl ? `<img src="${note.imageUrl}" alt="Attached image">` : ''}
+          ${note.imageData ? `<img src="${note.imageData}" alt="Attached image">` : ''}
+        </div>
         <div class="timestamp">${new Date(note.created_at).toLocaleString()}</div>
       `;
       
@@ -360,17 +439,39 @@
     // Add new note
     async function addNewNote() {
       const content = noteContent.value.trim();
-      if (!content) return;
+      if (!content && !currentImageData) return;
       
       // Default position is in the top-right stack
       await room.collection('note').create({
         content: content,
         x: null,
-        y: null
+        y: null,
+        imageData: currentImageData,
+        created_at: new Date().toISOString(),
+        username: await getUsernameOrDefault()
       });
       
       // Reset and hide form
+      resetForm();
+    }
+    
+    // Get current username or use a default
+    async function getUsernameOrDefault() {
+      try {
+        const user = await window.websim.getUser();
+        return user ? user.username : 'anonymous';
+      } catch (error) {
+        console.error('Error getting username:', error);
+        return 'anonymous';
+      }
+    }
+    
+    // Reset the form
+    function resetForm() {
       noteContent.value = '';
+      currentImageData = null;
+      imagePreview.style.display = 'none';
+      previewImg.src = '';
       noteModal.classList.remove('active');
     }
     
@@ -436,16 +537,42 @@
       document.removeEventListener('mouseup', releaseDrag);
     }
     
+    // Handle image selection
+    noteImage.addEventListener('change', function(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      
+      // Validate file is an image
+      if (!file.type.match('image.*')) {
+        alert('Please select an image file');
+        return;
+      }
+      
+      // Read and preview the image
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        currentImageData = e.target.result;
+        previewImg.src = currentImageData;
+        imagePreview.style.display = 'block';
+      };
+      reader.readAsDataURL(file);
+    });
+    
+    // Remove selected image
+    removeImageBtn.addEventListener('click', function() {
+      currentImageData = null;
+      noteImage.value = '';
+      previewImg.src = '';
+      imagePreview.style.display = 'none';
+    });
+    
     // Event Listeners
     newNoteBtn.addEventListener('click', () => {
       noteModal.classList.add('active');
       noteContent.focus();
     });
     
-    cancelNoteBtn.addEventListener('click', () => {
-      noteContent.value = '';
-      noteModal.classList.remove('active');
-    });
+    cancelNoteBtn.addEventListener('click', resetForm);
     
     addNoteBtn.addEventListener('click', addNewNote);
     
@@ -454,14 +581,14 @@
         addNewNote();
       }
       if (e.key === 'Escape') {
-        noteModal.classList.remove('active');
+        resetForm();
       }
     });
     
     // Close modal if clicking outside the form
     noteModal.addEventListener('click', (e) => {
       if (e.target === noteModal) {
-        noteModal.classList.remove('active');
+        resetForm();
       }
     });
     
