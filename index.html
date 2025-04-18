@@ -329,14 +329,13 @@
                     } else if (inline.type === 'image') {
                       // Extract image URL from the comment content
                       imageUrl = inline.url;
-                      // Add placeholder for image in text content
-                      content += '[Image]';
+                      // Remove the [Image] placeholder
                     } else if (inline.type === 'link' && inline.children) {
                       // Check if link contains an image
                       inline.children.forEach(linkChild => {
                         if (linkChild.type === 'image') {
                           imageUrl = linkChild.url;
-                          content += '[Image]';
+                          // Remove the [Image] placeholder
                         } else if (linkChild.type === 'text') {
                           content += linkChild.text;
                         }
@@ -347,7 +346,7 @@
                 } else if (block.type === 'image') {
                   // Handle block-level images
                   imageUrl = block.url;
-                  content += '[Image]\n';
+                  // Remove the [Image] placeholder
                 }
               });
             } else if (comment.raw_content) {
