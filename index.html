@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Collaborative Sticky Notes</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: 'Arial', sans-serif;
+      min-height: 100vh;
+      min-width: 100vw;
+      position: relative;
+      overflow: hidden;
+      background-color: #f5f5f5;
+    }
+    
+    .sticky-container {
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      z-index: 100;
+    }
+    
+    .sticky-note {
+      width: 200px;
+      min-height: 100px;
+      padding: 15px;
+      background-color: #ffeb3b;
+      border-radius: 2px;
+      box-shadow: 3px 3px 5px rgba(0,0,0,0.2);
+      cursor: move;
+      position: absolute;
+      z-index: 10;
+      font-size: 14px;
+      display: flex;
+      flex-direction: column;
+      transform: rotate(1deg);
+      transition: box-shadow 0.2s ease;
+    }
+    
+    .sticky-note:nth-child(3n) {
+      background-color: #4fc3f7;
+      transform: rotate(-1deg);
+    }
+    
+    .sticky-note:nth-child(3n+1) {
+      background-color: #aed581;
+      transform: rotate(0deg);
+    }
+    
+    .sticky-note:hover {
+      box-shadow: 5px 5px 10px rgba(0,0,0,0.3);
+      z-index: 20;
+    }
+    
+    .sticky-note .username {
+      font-weight: bold;
+      margin-bottom: 5px;
+      border-bottom: 1px solid rgba(0,0,0,0.1);
+      padding-bottom: 5px;
+      display: flex;
+      align-items: center;
+    }
+    
+    .sticky-note .avatar {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      margin-right: 5px;
+    }
+    
+    .sticky-note .content {
+      flex-grow: 1;
+    }
+    
+    .sticky-note .timestamp {
+      font-size: 10px;
+      text-align: right;
+      margin-top: 5px;
+      color: rgba(0,0,0,0.5);
+    }
+    
+    .new-note-btn {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      width: 60px;
+      height: 60px;
+      border-radius: 50%;
+      background-color: #ff5722;
+      color: white;
+      border: none;
+      font-size: 24px;
+      box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
+      cursor: pointer;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    .new-note-btn:hover {
+      background-color: #e64a19;
+    }
+    
+    .note-modal {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0,0,0,0.5);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+    
+    .note-modal.active {
+      display: flex;
+    }
+    
+    .note-form {
+      width: 300px;
+      background-color: white;
+      padding: 20px;
+      border-radius: 5px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.5);
+    }
+    
+    .note-form textarea {
+      width: 100%;
+      height: 100px;
+      resize: none;
+      margin-bottom: 10px;
+      padding: 10px;
+      box-sizing: border-box;
+    }
+    
+    .note-form-buttons {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+    }
+    
+    .note-form-buttons button {
+      padding: 8px 15px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    
+    .note-form-buttons .cancel {
+      background-color: #e0e0e0;
+    }
+    
+    .note-form-buttons .submit {
+      background-color: #4caf50;
+      color: white;
+    }
+  </style>
+</head>
+<body>
+  <div class="sticky-container" id="sticky-container"></div>
+  
+  <button class="new-note-btn" id="new-note-btn">+</button>
+  
+  <div class="note-modal" id="note-modal">
+    <div class="note-form">
+      <textarea id="note-content" placeholder="Add your comment..."></textarea>
+      <div class="note-form-buttons">
+        <button class="cancel" id="cancel-note">Cancel</button>
+        <button class="submit" id="add-note">Add Note</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Initialize websocket connection for realtime sync
+    const room = new WebsimSocket();
+    
+    // DOM elements
+    const stickyContainer = document.getElementById('sticky-container');
+    const newNoteBtn = document.getElementById('new-note-btn');
+    const noteModal = document.getElementById('note-modal');
+    const noteContent = document.getElementById('note-content');
+    const addNoteBtn = document.getElementById('add-note');
+    const cancelNoteBtn = document.getElementById('cancel-note');
+    
+    // Track which note is being dragged
+    let activeDrag = null;
+    let offsetX = 0;
+    let offsetY = 0;
+    
+    // Initialize the connection
+    async function initialize() {
+      await room.initialize();
+      
+      // Load existing notes
+      loadNotes();
+      
+      // Subscribe to changes in the notes collection
+      room.collection('note').subscribe(renderNotes);
+    }
+    
+    // Load notes from database
+    function loadNotes() {
+      const notes = room.collection('note').getList();
+      renderNotes(notes);
+    }
+    
+    // Render notes in their positions
+    function renderNotes(notes) {
+      // Clear existing notes to prevent duplicates
+      document.querySelectorAll('.sticky-note').forEach(note => note.remove());
+      
+      // For notes that don't have a position yet, we'll stack them in the top right
+      let stackTop = 10;
+      
+      notes.forEach(note => {
+        createStickyNoteElement(note, stackTop);
+        
+        // Only increment the stack position for notes without custom positions
+        if (!note.x && !note.y) {
+          stackTop += 120; // Height of note + gap
+        }
+      });
+    }
+    
+    // Create a single sticky note element
+    function createStickyNoteElement(note, stackTop) {
+      const stickyNote = document.createElement('div');
+      stickyNote.className = 'sticky-note';
+      stickyNote.dataset.id = note.id;
+      
+      // Use note's position if available, otherwise stack in top-right
+      if (note.x && note.y) {
+        stickyNote.style.left = `${note.x}px`;
+        stickyNote.style.top = `${note.y}px`;
+      } else {
+        stickyNote.style.right = '10px';
+        stickyNote.style.top = `${stackTop}px`;
+      }
+      
+      // Build note content
+      const contentHtml = `
+        <div class="username">
+          <img class="avatar" src="https://images.websim.ai/avatar/${note.username}" alt="${note.username}">
+          @${note.username}
+        </div>
+        <div class="content">${note.content}</div>
+        <div class="timestamp">${new Date(note.created_at).toLocaleString()}</div>
+      `;
+      
+      stickyNote.innerHTML = contentHtml;
+      document.body.appendChild(stickyNote);
+      
+      // Make the note draggable
+      stickyNote.addEventListener('mousedown', startDrag);
+    }
+    
+    // Add new note
+    async function addNewNote() {
+      const content = noteContent.value.trim();
+      if (!content) return;
+      
+      // Default position is in the top-right stack
+      await room.collection('note').create({
+        content: content,
+        x: null,
+        y: null
+      });
+      
+      // Reset and hide form
+      noteContent.value = '';
+      noteModal.classList.remove('active');
+    }
+    
+    // Start dragging a note
+    function startDrag(e) {
+      // Only allow left-button drag
+      if (e.button !== 0) return;
+      
+      activeDrag = e.currentTarget;
+      
+      // Calculate offset from mouse position to note top-left corner
+      const rect = activeDrag.getBoundingClientRect();
+      offsetX = e.clientX - rect.left;
+      offsetY = e.clientY - rect.top;
+      
+      // Bring the note to front while dragging
+      activeDrag.style.zIndex = '1000';
+      
+      // Add event listeners for drag and release
+      document.addEventListener('mousemove', dragNote);
+      document.addEventListener('mouseup', releaseDrag);
+      
+      // Prevent default behaviors
+      e.preventDefault();
+    }
+    
+    // Handle drag movement
+    function dragNote(e) {
+      if (!activeDrag) return;
+      
+      // Update note position
+      const x = e.clientX - offsetX;
+      const y = e.clientY - offsetY;
+      
+      activeDrag.style.left = `${x}px`;
+      activeDrag.style.top = `${y}px`;
+      activeDrag.style.right = 'auto'; // Clear right position if originally stacked
+      
+      e.preventDefault();
+    }
+    
+    // Handle drag release
+    async function releaseDrag(e) {
+      if (!activeDrag) return;
+      
+      // Get final position
+      const x = parseInt(activeDrag.style.left);
+      const y = parseInt(activeDrag.style.top);
+      
+      // Save position to database
+      const noteId = activeDrag.dataset.id;
+      await room.collection('note').update(noteId, {
+        x: x,
+        y: y
+      });
+      
+      // Reset z-index
+      activeDrag.style.zIndex = '10';
+      
+      // Clean up
+      activeDrag = null;
+      document.removeEventListener('mousemove', dragNote);
+      document.removeEventListener('mouseup', releaseDrag);
+    }
+    
+    // Event Listeners
+    newNoteBtn.addEventListener('click', () => {
+      noteModal.classList.add('active');
+      noteContent.focus();
+    });
+    
+    cancelNoteBtn.addEventListener('click', () => {
+      noteContent.value = '';
+      noteModal.classList.remove('active');
+    });
+    
+    addNoteBtn.addEventListener('click', addNewNote);
+    
+    noteContent.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && e.ctrlKey) {
+        addNewNote();
+      }
+      if (e.key === 'Escape') {
+        noteModal.classList.remove('active');
+      }
+    });
+    
+    // Close modal if clicking outside the form
+    noteModal.addEventListener('click', (e) => {
+      if (e.target === noteModal) {
+        noteModal.classList.remove('active');
+      }
+    });
+    
+    // Initialize the app
+    initialize();
+  </script>
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"4c6229722a6346bc8eb5cb0e5eae5d41","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
+</body>
+</html>
+
