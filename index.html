@@ -163,6 +163,27 @@
       background-color: #4caf50;
       color: white;
     }
+    
+    /* Style for metadata comment notes */
+    .sticky-note.metadata {
+      border: 2px dashed rgba(0,0,0,0.2);
+      background-color: #ffcc80;
+    }
+    
+    .sticky-note .metadata-badge {
+      position: absolute;
+      top: -10px;
+      right: -10px;
+      background-color: #ff5722;
+      color: white;
+      border-radius: 50%;
+      width: 20px;
+      height: 20px;
+      font-size: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
   </style>
 </head>
 <body>
@@ -206,12 +227,76 @@
       
       // Subscribe to changes in the notes collection
       room.collection('note').subscribe(renderNotes);
+      
+      // Fetch and add metadata comments
+      await fetchMetadataComments();
     }
     
     // Load notes from database
     function loadNotes() {
       const notes = room.collection('note').getList();
       renderNotes(notes);
+    }
+    
+    // Fetch project metadata comments from websim API
+    async function fetchMetadataComments() {
+      try {
+        // Get current project info
+        const project = await window.websim.getCurrentProject();
+        if (!project || !project.id) return;
+        
+        // Fetch comments for the current project
+        const response = await fetch(`/api/v1/projects/${project.id}/comments`);
+        if (!response.ok) return;
+        
+        const data = await response.json();
+        const comments = data.comments.data;
+        
+        // Convert each comment to a note if it doesn't already exist
+        for (const item of comments) {
+          const { comment } = item;
+          
+          // Skip if this comment is already added as a note
+          const existingNotes = room.collection('note').getList();
+          const alreadyExists = existingNotes.some(note => 
+            note.commentId === comment.id
+          );
+          
+          if (!alreadyExists) {
+            // Extract plain text from the document node content
+            let content = '';
+            if (comment.content && comment.content.children) {
+              comment.content.children.forEach(block => {
+                if (block.type === 'paragraph' && block.children) {
+                  block.children.forEach(inline => {
+                    if (inline.type === 'text') {
+                      content += inline.text;
+                    }
+                  });
+                  content += '\n';
+                }
+              });
+            } else if (comment.raw_content) {
+              content = comment.raw_content;
+            }
+            
+            if (content) {
+              // Create a note for this comment
+              await room.collection('note').create({
+                content: content,
+                username: comment.author ? comment.author.username : 'anonymous',
+                created_at: comment.created_at,
+                x: Math.random() * (window.innerWidth - 250),
+                y: Math.random() * (window.innerHeight - 150),
+                isMetadata: true,
+                commentId: comment.id
+              });
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching metadata comments:', error);
+      }
     }
     
     // Render notes in their positions
@@ -236,6 +321,9 @@
     function createStickyNoteElement(note, stackTop) {
       const stickyNote = document.createElement('div');
       stickyNote.className = 'sticky-note';
+      if (note.isMetadata) {
+        stickyNote.classList.add('metadata');
+      }
       stickyNote.dataset.id = note.id;
       
       // Use note's position if available, otherwise stack in top-right
@@ -248,7 +336,7 @@
       }
       
       // Build note content
-      const contentHtml = `
+      let contentHtml = `
         <div class="username">
           <img class="avatar" src="https://images.websim.ai/avatar/${note.username}" alt="${note.username}">
           @${note.username}
@@ -256,6 +344,11 @@
         <div class="content">${note.content}</div>
         <div class="timestamp">${new Date(note.created_at).toLocaleString()}</div>
       `;
+      
+      // Add metadata badge if this is a metadata comment
+      if (note.isMetadata) {
+        contentHtml += `<div class="metadata-badge" title="Metadata Comment">M</div>`;
+      }
       
       stickyNote.innerHTML = contentHtml;
       document.body.appendChild(stickyNote);
@@ -378,4 +471,3 @@
 <script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"4c6229722a6346bc8eb5cb0e5eae5d41","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
 </body>
 </html>
-
